@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 #include <mpi.h>
 #include <pthread.h>
 #include "mpi_override.h"
@@ -9,7 +11,7 @@
 //#define DEBUG
 /*global variables*/
 forwarding_buf *forwarding_buffer = NULL;
-
+int buf_forwarding_count = 0, forwarding_count = 0;
 
 
 int forwarding_buf_init(){
@@ -37,13 +39,17 @@ int buffer_or_send(void *buf, int len, int src, int tag){
     header[2] = tag;
     int msgLen[1];
     if(len + 3*sizeof(int) + forwarding_buffer->current >= forwarding_buffer->capacity){
+        //printf("[%d] Sending current buffer.\n", actual_rank);
         send_current_buffer();
+        
     }
     if(len + 3*sizeof(int) >= forwarding_buffer->capacity){ //Message won't fit in buffer
+        //printf("[%d] Message won't fit, forwarding.\n", actual_rank);
         msgLen[0] = len + 3*sizeof(int);
         socket_send(msgLen, sizeof(int));
         socket_send(header, 3*sizeof(int));
         socket_send(buf, len);
+        forwarding_count++;
     }
     else{
         memcpy((char *)(forwarding_buffer->buffer+forwarding_buffer->current), (char *)header, 3*sizeof(int));
@@ -57,18 +63,38 @@ int buffer_or_send(void *buf, int len, int src, int tag){
 
 int send_current_buffer(){
     if(forwarding_buffer->current > 0){
-//#ifdef DEBUG
+        buf_forwarding_count++;
+#ifdef DEBUG
     printf("[%d] Sending current buffer. Size is %d\n", 
             actual_rank, forwarding_buffer->current);
     fflush(stdout);
-//#endif
+#endif
+/*        struct timeval time_t1, time_t2;
+        gettimeofday(&time_t1, 0x0);
+        struct rusage usage1, usage2;
+        getrusage(RUSAGE_SELF, &usage1);*/
         int msgLen[1];
         msgLen[0] = forwarding_buffer->current;
-//        printf("[%d] Sending length. Byte 1: %d, Byte 2: %d, Byte 3: %d, Byte 4: %d\n", 
-//                actual_rank, (*msgLen) & 0xFF, (*(msgLen+1)) & 0xFF, (*(msgLen+2)) & 0xFF, (*(msgLen+3)) & 0xFF);
         socket_send(msgLen, sizeof(int));
         socket_send(forwarding_buffer->buffer, forwarding_buffer->current);
         forwarding_buffer->current = 0;
+/*        getrusage(RUSAGE_SELF, &usage2);
+        gettimeofday(&time_t2, 0x0);
+        double sec = (usage2.ru_utime.tv_sec - usage1.ru_utime.tv_sec);
+        double usec = (usage2.ru_utime.tv_usec - usage1.ru_utime.tv_usec) / 1000000.0;
+        double stdiff = sec + usec;
+        printf("[%d] Spent %.6f seconds in user mode.\n", actual_rank, stdiff);
+        sec = (usage2.ru_stime.tv_sec - usage1.ru_stime.tv_sec);
+        usec = (usage2.ru_stime.tv_usec - usage1.ru_stime.tv_usec) / 1000000.0;
+        stdiff = sec + usec;
+        printf("[%d] Spent %.6f seconds in kernel mode.\n", actual_rank, stdiff);
+        printf("[%d] Number of voluntary context switches during send is %ld.\n", actual_rank, usage2.ru_nvcsw - usage1.ru_nvcsw);
+        printf("[%d] Number of involuntary context switches during send is %ld.\n", actual_rank, usage2.ru_nivcsw - usage1.ru_nivcsw);
+        sec = (time_t2.tv_sec - time_t1.tv_sec);
+        usec = (time_t2.tv_usec - time_t1.tv_usec) / 1000000.0;
+        stdiff = sec + usec;
+        printf("[%d] Send time for %d bytes is %.6f.\n", actual_rank, msgLen[0], stdiff);
+        printf("[%d] Send started at %.6f and ended at %.6f.\n", actual_rank, time_t1.tv_sec + time_t1.tv_usec / 1000000.0, time_t2.tv_sec + time_t2.tv_usec / 1000000.0);*/
     }
     return 0;
 }

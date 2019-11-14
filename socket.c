@@ -3,6 +3,8 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 #ifdef USE_RDMA
 #include <rdma/rsocket.h>
 #endif
@@ -13,6 +15,7 @@
 #include <errno.h>
 #include <ifaddrs.h>
 #include <pthread.h>
+#include <sched.h>
 #include "mpi.h"
 #include "socket.h"
 #include "mpi_override.h"
@@ -31,7 +34,6 @@ int get_my_ip(char *ip){
     struct ifaddrs *myaddrs = NULL, *ifa = NULL;
     void *in_addr = NULL;
     struct sockaddr_in *s4 = NULL; 
-    
     if(getifaddrs(&myaddrs) != 0)
     {
         perror("getifaddrs");
@@ -64,8 +66,9 @@ int get_my_ip(char *ip){
             if(!strncmp(ifa->ifa_name, "ib", 2)){
                 break;
             }
-            else
+            else{
                 continue;
+            }
 #else
             break;
 #endif
@@ -377,6 +380,10 @@ int socket_send(void *buf, int len){
 
 /*shadow receives msg from its main*/
 int socket_recv(){
+/*    struct timeval time_t1, time_t2;
+    gettimeofday(&time_t1, 0x0);
+    struct rusage usage1, usage2;
+    getrusage(RUSAGE_SELF, &usage1);*/
     int count;
     int msgLen[1];
     int header[3];
@@ -570,7 +577,24 @@ int socket_recv(){
         PMPI_Send(&code, 1, MPI_INT, actual_rank-(appSize-shStart), SHADOW_FORCE_LEAPING_TAG, ls_cntr_world_comm);
 #endif      
     }
-
+/*    getrusage(RUSAGE_SELF, &usage2);
+    gettimeofday(&time_t2, 0x0);
+    double sec = (usage2.ru_utime.tv_sec - usage1.ru_utime.tv_sec);
+    double usec = (usage2.ru_utime.tv_usec - usage1.ru_utime.tv_usec) / 1000000.0;
+    double rtdiff = sec + usec;
+    printf("[%d] Spent %.6f seconds in user mode.\n", actual_rank, rtdiff);
+    sec = (usage2.ru_stime.tv_sec - usage1.ru_stime.tv_sec);
+    usec = (usage2.ru_stime.tv_usec - usage1.ru_stime.tv_usec) / 1000000.0;
+    rtdiff = sec + usec;
+    printf("[%d] Spent %.6f seconds in kernel mode.\n", actual_rank, rtdiff);
+    printf("[%d] Number of voluntary context switches during receive is %ld.\n", actual_rank, usage2.ru_nvcsw - usage1.ru_nvcsw);
+    printf("[%d] Number of involuntary context switches during receive is %ld.\n", actual_rank, usage2.ru_nivcsw - usage1.ru_nivcsw);
+    sec = (time_t2.tv_sec - time_t1.tv_sec);
+    usec = (time_t2.tv_usec - time_t1.tv_usec) / 1000000.0;
+    rtdiff = sec + usec;
+    printf("[%d] Receive time for %d bytes is %.6f\n", actual_rank, msgLen[0], rtdiff);
+    printf("[%d] Receive started at %.6f and ended at %.6f.\n", actual_rank, time_t1.tv_sec + time_t1.tv_usec / 1000000.0, time_t2.tv_sec + time_t2.tv_usec / 1000000.0);*/
+    
     return 0;
 }
 
@@ -580,7 +604,12 @@ int socket_recv(){
 int wait_for_msg(){
     fd_set read_fds;
     fd_set master;
-    
+    int ret;
+    struct sched_param param;
+    param.sched_priority = 2;
+    ret=sched_setscheduler(0, SCHED_RR, &param);
+    if(ret==-1)
+        printf("[%d]: Set scheduler returned error %d!\n", actual_rank, errno);
     FD_ZERO(&master);
     FD_ZERO(&read_fds);
     FD_SET(sock_fd, &master);

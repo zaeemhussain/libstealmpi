@@ -3,10 +3,11 @@
 #include <sys/resource.h>
 #include <mpi.h>
 #include <signal.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <pthread.h>
 #include <string.h>
 #include <errno.h>
-#include <sched.h>
 #include <linux/prctl.h>
 #include <sched.h>
 #include "mpi_override.h"
@@ -15,21 +16,32 @@
 #include "request_list.h"
 #include "shared_mem.h"
 #include "forwarding_buffer.h"
-//#define DEBUG
+//#define SLEEPDEBUG
 
 struct timeval time_t1, time_t2;
 double tdiff;
 double mpicommtime=0.0;
+double sleeptime=0.0;
 double sockcommtime=0.0;
+int sleepcount = 0;
 int actual_rank;                  // 'this' process rank
 int actual_size;
 int appSize, shStart, shEnd, cStart, cEnd;
-int mainsleeptime=0;
+int mainsleeptime=50;
 int *flags_ptr;
 int exflag=0;
 int full_speed_flag, term_flag=0, cterm_flag=0;
 int ls_cntr_msg_count=0, ls_recv_counter=0, ls_data_msg_count=0;
 int need2leap=0;
+int sleepiters = 1000000;
+int sendCallCount = 0, recvCallCount = 0, probeCallCount = 0, waitCallCount = 0, waitanyCallCount = 0, waitsomeCallCount = 0;
+int sendPrCount = 0, recvPrCount = 0, probePrCount = 0, waitPrCount = 0, waitanyPrCount = 0, waitsomePrCount = 0;
+int bcastCallCount = 0, reduceCallCount = 0, allreduceCallCount = 0, alltoallCallCount = 0, alltoallvCallCount = 0, gatherCallCount = 0;
+int bcastPrCount = 0, reducePrCount = 0, allreducePrCount = 0, alltoallPrCount = 0, alltoallvPrCount = 0, gatherPrCount = 0;
+int allgatherCallCount = 0, gathervCallCount = 0, allgathervCallCount = 0, scatterCallCount = 0, scanCallCount = 0, scattervCallCount = 0;
+int allgatherPrCount = 0, gathervPrCount = 0, allgathervPrCount = 0, scatterPrCount = 0, scanPrCount = 0, scattervPrCount = 0;
+int reducescatterCallCount = 0, reducescatterblockCallCount = 0;
+int reducescatterPrCount = 0, reducescatterblockPrCount = 0;
 long long ls_data_msg_counter=0;
 long long ls_dat_msg_len=0;
 int fsflag=0;
@@ -37,7 +49,7 @@ MPI_Comm ls_data_world_comm, ls_cntr_world_comm, ls_failure_world_comm;
 unsigned int cpu1,cpu2;// *node1,*node2;
 long long intcount=0;
 struct itimerval ttimer;
-
+int shadow_slot_count = 0;
 
 
 int MPI_Comm_size(MPI_Comm comm, int *size){
@@ -69,15 +81,18 @@ int MPI_Comm_rank(MPI_Comm comm, int *rank){
 
 int MPI_Init(int* argc, char*** argv){
     int ret;
-    
     gettimeofday(&time_t1, 0x0);
+    
     ret = PMPI_Init(argc, argv);
     
     PMPI_Comm_size(MPI_COMM_WORLD, &actual_size);
     PMPI_Comm_rank(MPI_COMM_WORLD, &actual_rank);    
     PMPI_Comm_dup(MPI_COMM_WORLD, &ls_cntr_world_comm);
     PMPI_Comm_dup(MPI_COMM_WORLD, &ls_failure_world_comm);
-
+    /*struct rlimit old, new;
+    struct rlimit *newp;
+    ret = getrlimit(RLIMIT_NICE, &new);
+    printf("[%d]: Hard limit is %d and soft limit is %d!\n", actual_rank, new.rlim_max, new.rlim_cur);*/
     /*int i = 0;
     char hostname[256];
     gethostname(hostname, sizeof(hostname));
@@ -91,17 +106,10 @@ int MPI_Init(int* argc, char*** argv){
     if((appSize + shEnd - shStart + 1) != actual_size)
         printf("[%d] Config does not match number of processes.\n", actual_rank);
     fclose(configF);
+    //printf("[%d]: Max thread priority is %d!\n", actual_rank, sched_get_priority_max(SCHED_OTHER));
+    //printf("[%d]: Minimum thread priority is %d!\n", actual_rank, sched_get_priority_min(SCHED_OTHER));
     PMPI_Comm_split(MPI_COMM_WORLD, actual_rank>=appSize, actual_rank, &ls_data_world_comm);
-
-    if(cStart < cEnd){
-        if(cStart <= actual_rank && actual_rank <= cEnd)
-            create_shared_mem();
-    }
-    else{
-        if((cStart <= actual_rank && actual_rank < appSize) || actual_rank <= cEnd)
-            create_shared_mem();
-    }
-
+    
     if(shStart <= actual_rank && actual_rank <= shEnd){
         forwarding_buf_init();
         socket_connect();
@@ -111,10 +119,23 @@ int MPI_Init(int* argc, char*** argv){
         socket_connect();
         //create_shared_mem();
         launch_monitor_thread(0);
-        while(!cterm_flag){ //this part would need to be fixed later
-            usleep(10000);
+        /*int incr=19;
+        int ret=nice(incr);
+        if(ret==-1)
+            printf("[%d]: Nice function returned -1!\n", actual_rank);
+        int policy = 0;
+        struct sched_param params;
+        ret = pthread_getschedparam(pthread_self(), &policy, &params);
+        if (ret != 0) {
+            printf("[%d]: Error in getting thread priority!\n", actual_rank);     
         }
-        /*pthread_join(ls_monitor_thread, NULL);
+        printf("[%d]: Stealing thread priority is %d!\n", actual_rank, params.sched_priority);*/
+        /*while(!cterm_flag){ //this part would need to be fixed later
+            usleep(1000000);
+            //shadow_slot_count++;
+        }
+      
+        pthread_join(ls_monitor_thread, NULL);
         free_thread_resources();
         mq_free();
 #ifdef USE_RDMA
@@ -128,6 +149,52 @@ int MPI_Init(int* argc, char*** argv){
         PMPI_Finalize();
         exit(0);*/
     }
+    if(actual_rank<appSize){
+        int ret;
+        struct sched_param param;
+        param.sched_priority = 1;
+        ret=sched_setscheduler(0, SCHED_RR, &param);
+        if(ret==-1)
+            printf("[%d]: Set scheduler returned error %d!\n", actual_rank, errno);
+    }
+    /*if(cStart < cEnd){
+        if(cStart <= actual_rank && actual_rank <= cEnd){
+            //create_shared_mem();
+            int which = PRIO_PROCESS;
+            int ret;
+            struct sched_param param;
+            param.sched_priority = 1;
+            //id_t pid = getpid();
+            //int ret = getpriority(which, pid);
+            //printf("[%d]: Current priority is %d!\n", actual_rank, ret);
+            //int incr=19;
+            //ret=nice(incr);
+            ret=sched_setscheduler(0, SCHED_RR, &param);
+            if(ret==-1)
+                printf("[%d]: Set scheduler returned error %d!\n", actual_rank, errno);
+            //ret = getpriority(which, pid);
+            //printf("[%d]: Priority after nice is %d!\n", actual_rank, ret);
+        }
+    }
+    else{
+        if((cStart <= actual_rank && actual_rank < appSize) || actual_rank <= cEnd){
+            //create_shared_mem();
+            //int which = PRIO_PROCESS;
+            int ret;
+            struct sched_param param;
+            param.sched_priority = 1;
+            //id_t pid = getpid();
+            //ret = getpriority(which, pid);
+            //printf("[%d]: Current priority is %d!\n", actual_rank, ret);
+            //int incr=19;
+            //ret=nice(incr);
+            ret=sched_setscheduler(0, SCHED_RR, &param);
+            if(ret==-1)
+                printf("[%d]: Set scheduler returned error %d!\n", actual_rank, errno);
+            //ret = getpriority(which, pid);
+            //printf("[%d]: Priority after nice is %d!\n", actual_rank, ret);
+        }
+    }*/
     return ret;
 }
 
@@ -139,36 +206,113 @@ int MPI_Finalize(){
     printf("[%d]: In finalize\n", actual_rank);
     fflush(stdout);
 #endif
-    if(actual_rank>=appSize)
-        printf("[%d] My time is %.6f\n", actual_rank, tdiff);
     double maxtime,avgtime;
-    if(cStart < cEnd){
+    /*if(cStart < cEnd){
         if(cStart <= actual_rank && actual_rank <= cEnd)
             *(flags_ptr+sizeof(int))=1;
     }
     else{
         if((cStart <= actual_rank && actual_rank < appSize) || actual_rank <= cEnd)
             *(flags_ptr+sizeof(int))=1;
-    }
+    }*/
     if(shStart <= actual_rank && actual_rank <= shEnd){
         send_current_buffer();
         free_forwarding_buffer();
     }
+    struct rusage usage1;
+    getrusage(RUSAGE_SELF, &usage1);
+    double fintime =  usage1.ru_stime.tv_sec + usage1.ru_stime.tv_usec / 1000000.0;
+    //printf("[%d] Spent %.6f seconds in kernel mode.\n", actual_rank, fintime );
+    fintime = usage1.ru_utime.tv_sec + usage1.ru_utime.tv_usec / 1000000;
+    //printf("[%d] Spent %.6f seconds in user mode.\n", actual_rank, fintime );
     gettimeofday(&time_t2, 0x0);
     double sec = (time_t2.tv_sec - time_t1.tv_sec);
     double usec = (time_t2.tv_usec - time_t1.tv_usec) / 1000000.0;
     tdiff = sec + usec;
     PMPI_Allreduce(&tdiff, &maxtime, 1, MPI_DOUBLE, MPI_MAX, ls_data_world_comm);
     PMPI_Allreduce(&tdiff, &avgtime, 1, MPI_DOUBLE, MPI_SUM, ls_data_world_comm);
-    cpu2=sched_getcpu();
+    //printf("[%d] Number of voluntary context switches is %ld.\n", actual_rank, usage1.ru_nvcsw);
+    //printf("[%d] Number of involuntary context switches is %ld.\n", actual_rank, usage1.ru_nivcsw);
+    //cpu2=sched_getcpu();
+    //printf("[%d] Average sleep delay was %.6f seconds.\n", actual_rank, sleeptime/sleepcount );
     if(actual_rank==0){
         printf("[%d] Total time is %.6f\n", actual_rank, maxtime);
         printf("[%d] Average time is %.6f\n", actual_rank, avgtime/appSize);
         if(actual_rank==0){
             printf("[%d] Number of data messages is %d\n", actual_rank, ls_data_msg_counter);
-            printf("[%d] Total message length is %d\n", actual_rank, ls_dat_msg_len);
+            printf("[%d] Total message length is %d bytes\n", actual_rank, ls_dat_msg_len);
         }
     }
+    /*if(sendCallCount > 0){
+    printf("[%d] Send call count is %d\n", actual_rank, sendCallCount);
+    printf("[%d] Send pr count average is %d\n", actual_rank, sendPrCount/sendCallCount);}
+    if(recvCallCount > 0){
+    printf("[%d] Recv call count is %d\n", actual_rank, recvCallCount);
+    printf("[%d] Recv pr count average is %d\n", actual_rank, recvPrCount/recvCallCount);}
+    if(probeCallCount > 0){
+    printf("[%d] Probe call count is %d\n", actual_rank, probeCallCount);
+    printf("[%d] Probe pr count average is %d\n", actual_rank, probePrCount/probeCallCount);}
+    if(waitCallCount > 0){
+    printf("[%d] Wait call count is %d\n", actual_rank, waitCallCount);
+    printf("[%d] Wait pr count average is %d\n", actual_rank, waitPrCount/waitCallCount);}
+    if(waitsomeCallCount > 0){
+    printf("[%d] Waitsome call count is %d\n", actual_rank, waitsomeCallCount);
+    printf("[%d] Waitsome pr count average is %d\n", actual_rank, waitsomePrCount/waitsomeCallCount);}
+    if(waitanyCallCount > 0){
+    printf("[%d] Waitany call count is %d\n", actual_rank, waitanyCallCount);
+    printf("[%d] Waitany pr count average is %d\n", actual_rank, waitanyPrCount/waitanyCallCount);}
+    if(bcastCallCount > 0){
+    printf("[%d] Bcast call count is %d\n", actual_rank, bcastCallCount);
+    printf("[%d] Bcast pr count average is %d\n", actual_rank, bcastPrCount/bcastCallCount);}
+    if(reduceCallCount > 0){
+    printf("[%d] Reduce call count is %d\n", actual_rank, reduceCallCount);
+    printf("[%d] Reduce pr count average is %d\n", actual_rank, reducePrCount/reduceCallCount);}
+    if(allreduceCallCount > 0){
+    printf("[%d] Allreduce call count is %d\n", actual_rank, allreduceCallCount);
+    printf("[%d] Allreduce pr count average is %d\n", actual_rank, allreducePrCount/allreduceCallCount);}
+    if(alltoallCallCount > 0){
+    printf("[%d] Alltoall call count is %d\n", actual_rank, alltoallCallCount);
+    printf("[%d] Alltoall pr count average is %d\n", actual_rank, alltoallPrCount/alltoallCallCount);}
+    if(alltoallvCallCount > 0){
+    printf("[%d] Alltoallv call count is %d\n", actual_rank, alltoallvCallCount);
+    printf("[%d] Alltoallv pr count average is %d\n", actual_rank, alltoallvPrCount/alltoallvCallCount);}
+    if(gatherCallCount > 0){
+    printf("[%d] Gather call count is %d\n", actual_rank, gatherCallCount);
+    printf("[%d] Gather pr count average is %d\n", actual_rank, gatherPrCount/gatherCallCount);}
+    if(allgatherCallCount > 0){
+    printf("[%d] Allgather call count is %d\n", actual_rank, allgatherCallCount);
+    printf("[%d] Allgather pr count average is %d\n", actual_rank, allgatherPrCount/allgatherCallCount);}
+    if(allgathervCallCount > 0){
+    printf("[%d] Allgatherv call count is %d\n", actual_rank, allgathervCallCount);
+    printf("[%d] Allgatherv pr count average is %d\n", actual_rank, allgathervPrCount/allgathervCallCount);}
+    if(gathervCallCount > 0){
+    printf("[%d] Gatherv call count is %d\n", actual_rank, gathervCallCount);
+    printf("[%d] Gatherv pr count average is %d\n", actual_rank, gathervPrCount/gathervCallCount);}
+    if(scanCallCount > 0){
+    printf("[%d] Scan call count is %d\n", actual_rank, scanCallCount);
+    printf("[%d] Scan pr count average is %d\n", actual_rank, scanPrCount/scanCallCount);}
+    if(scatterCallCount > 0){
+    printf("[%d] Scatter call count is %d\n", actual_rank, scatterCallCount);
+    printf("[%d] Scatter pr count average is %d\n", actual_rank, scatterPrCount/scatterCallCount);}
+    if(scattervCallCount > 0){
+    printf("[%d] Scatterv call count is %d\n", actual_rank, scattervCallCount);
+    printf("[%d] Scatterv pr count average is %d\n", actual_rank, scattervPrCount/scattervCallCount);}
+    if(reducescatterCallCount > 0){
+    printf("[%d] Reducescatter call count is %d\n", actual_rank, reducescatterCallCount);
+    printf("[%d] Reducescatter pr count average is %d\n", actual_rank, reducescatterPrCount/reducescatterCallCount);}
+    if(reducescatterblockCallCount > 0){
+    printf("[%d] Reducescatterblock call count is %d\n", actual_rank, reducescatterblockCallCount);
+    printf("[%d] Reducescatterblock pr count average is %d\n", actual_rank, reducescatterblockPrCount/reducescatterblockCallCount);}*/
+    //if(actual_rank>=appSize)
+    //    printf("[%d] My time is %.6f\n", actual_rank, tdiff);
+    if(actual_rank==appSize){
+        printf("[%d] Maximum shadow time is %.6f\n", actual_rank, maxtime);
+        printf("[%d] Average time is %.6f\n", actual_rank, avgtime/appSize);
+    }
+    /*if(actual_rank<appSize){
+        printf("[%d] Forwarding count is %d.\n", actual_rank, forwarding_count);
+        printf("[%d] Buffer forwarding count is %d.\n", actual_rank, buf_forwarding_count);
+    }*/
     if(actual_rank==0)// || actual_rank>=(actual_size/2))
         printf("[%d] My time is %.6f\n", actual_rank, tdiff);
 
@@ -191,8 +335,8 @@ int MPI_Finalize(){
         printf("[%d]: shadow in finalize\n", actual_rank);
         fflush(stdout);
 #endif
-        /*printf("[%d]: Entered interrupt %d times.\n", actual_rank, intcount);
-        fflush(stdout);*/
+        //printf("[%d]: I got the cpu %d times while main was executing.\n", actual_rank, shadow_slot_count);
+        //fflush(stdout);
 
         /*terminate monitor thread first*/
         pthread_join(ls_monitor_thread, NULL);
@@ -227,14 +371,14 @@ int MPI_Finalize(){
     if(actual_rank>=appSize){
         close_shared_mem();
     }
-    if(cStart < cEnd){
+    /*if(cStart < cEnd){
         if(cStart <= actual_rank && actual_rank <= cEnd)
             close_shared_mem();
     }
     else{
         if((cStart <= actual_rank && actual_rank < appSize) || actual_rank <= cEnd)
             close_shared_mem();
-    }
+    }*/
 #ifdef DEBUG
     printf("[%d]: Time spent in mpi recv is %.3f.\n", actual_rank, mpicommtime);
     printf("[%d]: Time spent in socket send is %.3f.\n", actual_rank, sockcommtime);
@@ -268,6 +412,7 @@ int MPI_Send(const void *buf, int count, MPI_Datatype datatype, int dest, int ta
         //PMPI_Send(buf, count, datatype, dest, tag, comm);
         PMPI_Isend(buf, count, datatype, dest, tag, comm,&request);  // actual SEND!!
         PMPI_Test(&request, &myflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!myflag){
 #ifdef DEBUG
         //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
@@ -277,14 +422,21 @@ int MPI_Send(const void *buf, int count, MPI_Datatype datatype, int dest, int ta
 #ifdef SLEEPDEBUG
             double tbefore=MPI_Wtime();
 #endif
-            usleep(mainsleeptime);
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
 #ifdef SLEEPDEBUG
             tbefore=MPI_Wtime()-tbefore;
-            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
-            fflush(stdout);
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
 #endif
             PMPI_Test(&request, &myflag, MPI_STATUS_IGNORE);
         }
+/*        sendPrCount += prCount;
+        sendCallCount++;*/
 #ifdef DEBUG
         printf("[%d] End send. Current time : %.3f\n", actual_rank, MPI_Wtime());
         fflush(stdout);
@@ -309,23 +461,31 @@ int MPI_Recv(void *buf, int count, MPI_Datatype datatype,
     double time1, time2;
     if(actual_rank<appSize){
         PMPI_Iprobe(source, tag, comm, &myflag, status);
+        int prCount = 0;
         while(!myflag){
 #ifdef DEBUG
-        //printf("[%d] Signalling its colocated shadow in recv. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
         //fflush(stdout);
 #endif
 //            *flags_ptr=1;
 #ifdef SLEEPDEBUG
             double tbefore=MPI_Wtime();
 #endif
-            usleep(mainsleeptime);
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
 #ifdef SLEEPDEBUG
             tbefore=MPI_Wtime()-tbefore;
-            printf("[%d] Current sleep in recv took %.6f seconds.\n", actual_rank, tbefore);
-            fflush(stdout);
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
 #endif
             PMPI_Iprobe(source, tag, comm, &myflag, status);
         }
+/*        recvPrCount += prCount;
+        recvCallCount++;*/
         if(status == MPI_STATUS_IGNORE){
             status = &temp_status;
         }
@@ -378,15 +538,31 @@ int MPI_Probe(int source, int tag, MPI_Comm comm, MPI_Status *status){
     if(actual_rank<appSize){
         int pflag=0;
         rc = PMPI_Iprobe(source, tag, comm, &pflag, status);
+        int prCount = 0;
         while(!pflag){
 #ifdef DEBUG
-        printf("[%d] Signalling its colocated shadow in probe. Current time : %.3f\n", actual_rank, MPI_Wtime());
-        fflush(stdout);
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //fflush(stdout);
 #endif
 //            *flags_ptr=1;
-            usleep(mainsleeptime);
+#ifdef SLEEPDEBUG
+            double tbefore=MPI_Wtime();
+#endif
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
+#ifdef SLEEPDEBUG
+            tbefore=MPI_Wtime()-tbefore;
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
+#endif
             rc = PMPI_Iprobe(source, tag, comm, &pflag, status);
         }
+/*        probePrCount += prCount;
+        probeCallCount++;*/
         if(shStart <= actual_rank && actual_rank <= shEnd){
         if(status != MPI_STATUS_IGNORE){
             buf[0] = status->MPI_SOURCE;
@@ -560,24 +736,31 @@ int MPI_Wait(MPI_Request *request, MPI_Status *status){
         }
         int wflag=0;
         PMPI_Test(request, &wflag, status);
+        int prCount = 0;
         while(!wflag){
 #ifdef DEBUG
-        //printf("[%d] Signalling its colocated shadow in wait. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
         //fflush(stdout);
 #endif
 //            *flags_ptr=1;
 #ifdef SLEEPDEBUG
             double tbefore=MPI_Wtime();
 #endif
-            usleep(mainsleeptime);
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
 #ifdef SLEEPDEBUG
             tbefore=MPI_Wtime()-tbefore;
-            printf("[%d] Current sleep in wait took %.6f seconds.\n", actual_rank, tbefore);
-            fflush(stdout);
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
 #endif
             PMPI_Test(request, &wflag, status);
         }
-
+/*        waitPrCount += prCount;
+        waitCallCount++;*/
         if((p = rl_find(request)) != NULL){
             /*This requset is for MPI_Irecv()*/
             MPI_Get_count(status, MPI_CHAR, &length);
@@ -649,23 +832,31 @@ int MPI_Waitany(int count, MPI_Request array_of_requests[],
         }
         int waflag=0;
         PMPI_Testany(count, array_of_requests, index, &waflag, status);
+        int prCount = 0;
         while(!waflag){
 #ifdef DEBUG
-        //printf("[%d] Signalling its colocated shadow in waitany. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
         //fflush(stdout);
 #endif
 //            *flags_ptr=1;
 #ifdef SLEEPDEBUG
             double tbefore=MPI_Wtime();
 #endif
-            usleep(mainsleeptime);
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
 #ifdef SLEEPDEBUG
             tbefore=MPI_Wtime()-tbefore;
-            printf("[%d] Current sleep in waitany took %.6f seconds.\n", actual_rank, tbefore);
-            fflush(stdout);
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
 #endif
             PMPI_Testany(count, array_of_requests, index, &waflag, status);
         }
+/*        waitanyPrCount += prCount;
+        waitCallCount++;*/
         if(shStart <= actual_rank && actual_rank <= shEnd){
         buffer_or_send(index, sizeof(int), 0, SHADOW_WAITANY_TAG);}
         ls_cntr_msg_count++;
@@ -757,23 +948,31 @@ int MPI_Waitsome(int incount, MPI_Request array_of_requests[],
             status_flag = 0;
         }
         PMPI_Testsome(incount, array_of_requests, outcount, array_of_indices, array_of_statuses);
-        while(*outcount==0){
+        int prCount = 0;
+        while(*outcount == 0){
 #ifdef DEBUG
-        //printf("[%d] Signalling its colocated shadow in waitsome. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
         //fflush(stdout);
 #endif
 //            *flags_ptr=1;
 #ifdef SLEEPDEBUG
             double tbefore=MPI_Wtime();
 #endif
-            usleep(mainsleeptime);
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
 #ifdef SLEEPDEBUG
             tbefore=MPI_Wtime()-tbefore;
-            printf("[%d] Current sleep in waitsome took %.6f seconds.\n", actual_rank, tbefore);
-            fflush(stdout);
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
 #endif
             PMPI_Testsome(incount, array_of_requests, outcount, array_of_indices, array_of_statuses);
         }
+/*        waitsomePrCount += prCount;
+        waitsomeCallCount++;*/
         if(*outcount == MPI_UNDEFINED){
             if(shStart <= actual_rank && actual_rank <= shEnd){
             buffer_or_send(outcount, sizeof(int), 0, SHADOW_WAITSOME_TAG);}

@@ -24,11 +24,18 @@
 
 extern int actual_rank, actual_size, term_flag, full_speed_flag, exflag, cterm_flag, mainsleeptime;
 extern int shStart, appSize, shEnd, cStart, cEnd;
+extern int sleepcount, sleepiters;
+extern int bcastCallCount, reduceCallCount, allreduceCallCount, alltoallCallCount, alltoallvCallCount, gatherCallCount;
+extern int bcastPrCount, reducePrCount, allreducePrCount, alltoallPrCount, alltoallvPrCount, gatherPrCount;
+extern int allgatherCallCount, gathervCallCount, allgathervCallCount, scatterCallCount, scanCallCount, scattervCallCount;
+extern int allgatherPrCount, gathervPrCount, allgathervPrCount, scatterPrCount, scanPrCount, scattervPrCount;
+extern int reducescatterCallCount, reducescatterblockCallCount;
+extern int reducescatterPrCount, reducescatterblockPrCount;
 extern int ls_data_msg_count, need2leap;
 extern long long ls_data_msg_counter;
 extern long long ls_dat_msg_len;
 extern MPI_Comm ls_data_world_comm, ls_cntr_world_comm, ls_failure_world_comm;
-extern double mpicommtime, sockcommtime;
+extern double mpicommtime, sockcommtime, sleeptime;
 extern int *flags_ptr;
 
 #endif

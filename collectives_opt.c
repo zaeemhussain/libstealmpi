@@ -11,9 +11,10 @@
 #include "request_list.h"
 #include "forwarding_buffer.h"
 #include <math.h>
-//#define DEBUG
+//#define SLEEPDEBUG
 
-
+struct timeval time_1, time_2;
+int allred_itercount = 0;
 
 int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm){
 /*    if( actual_rank >= actual_size/2 ){
@@ -43,23 +44,31 @@ int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm
             PMPI_Ibcast(buffer, count, datatype, root, comm, &request);
         }
         PMPI_Test(&request, &bflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!bflag){
 #ifdef DEBUG
-        //printf("[%d] Signalling its colocated shadow in bcast. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
         //fflush(stdout);
 #endif
 //            *flags_ptr=1;
 #ifdef SLEEPDEBUG
             double tbefore=MPI_Wtime();
 #endif
-            usleep(mainsleeptime);
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
 #ifdef SLEEPDEBUG
             tbefore=MPI_Wtime()-tbefore;
-            printf("[%d] Current sleep in bcast took %.6f seconds.\n", actual_rank, tbefore);
-            fflush(stdout);
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
 #endif
             PMPI_Test(&request, &bflag, MPI_STATUS_IGNORE);
         }
+/*        bcastPrCount += prCount;
+        bcastCallCount++;*/
         /*forward result to shadow*/
         if(shStart <= actual_rank && actual_rank <= shEnd){
         MPI_Type_get_extent(datatype, &lb, &extent);
@@ -122,24 +131,31 @@ int MPI_Reduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datat
             rc = PMPI_Ireduce(sendbuf, recvbuf, count, datatype, op, root, comm, &request);
         }
         PMPI_Test(&request, &rdflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!rdflag){
 #ifdef DEBUG
-        //printf("[%d] Signalling its colocated shadow in reduce. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
         //fflush(stdout);
 #endif
 //            *flags_ptr=1;
 #ifdef SLEEPDEBUG
             double tbefore=MPI_Wtime();
 #endif
-            usleep(mainsleeptime);
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
 #ifdef SLEEPDEBUG
             tbefore=MPI_Wtime()-tbefore;
-            printf("[%d] Current sleep in reduce took %.6f seconds.\n", actual_rank, tbefore);
-            fflush(stdout);
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
 #endif
             PMPI_Test(&request, &rdflag, MPI_STATUS_IGNORE);
         }
-
+/*        reducePrCount += prCount;
+        reduceCallCount++;*/
         /*forward result to shadow*/
         if(comm_rank == root){
             if(shStart <= actual_rank && actual_rank <= shEnd){
@@ -190,7 +206,8 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
 #endif
     printf("[%d] begin Allreduce\n", actual_rank);
 #endif
-
+    double sec;
+    double usec;
     if(actual_rank<appSize){
         if(comm == MPI_COMM_WORLD){
             PMPI_Iallreduce(sendbuf, recvbuf, count, datatype, op, ls_data_world_comm, &request);
@@ -199,23 +216,38 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
             PMPI_Iallreduce(sendbuf, recvbuf, count, datatype, op, comm, &request);
         }
         PMPI_Test(&request, &ardflag, MPI_STATUS_IGNORE);
+        gettimeofday(&time_1, 0x0);
+        if(allred_itercount > 0){
+            sec = (time_1.tv_sec -time_2.tv_sec);
+            usec = (time_1.tv_usec - time_2.tv_usec) / 1000000.0;
+        }
+
+        int prCount = 0;
         while(!ardflag){
 #ifdef DEBUG
-        //printf("[%d] Signalling its colocated shadow in allreduce. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
         //fflush(stdout);
 #endif
 //            *flags_ptr=1;
 #ifdef SLEEPDEBUG
             double tbefore=MPI_Wtime();
 #endif
-            usleep(mainsleeptime);
+/*            if(prCount == 0)*/
+            //if(allred_itercount > 0 /*&& allred_itercount < 3800 /*&& (sec + usec) < 0.001*/)
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
 #ifdef SLEEPDEBUG
             tbefore=MPI_Wtime()-tbefore;
-            printf("[%d] Current sleep in allreduce took %.6f seconds.\n", actual_rank, tbefore);
-            fflush(stdout);
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
 #endif
             PMPI_Test(&request, &ardflag, MPI_STATUS_IGNORE);
         }
+/*        allreducePrCount += prCount;
+        allreduceCallCount++;*/
         /*if(comm == MPI_COMM_WORLD){
             PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, ls_data_world_comm);
         }
@@ -260,9 +292,8 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
         sigaddset(&set, SIGALRM);
         pthread_sigmask(SIG_UNBLOCK, &set, NULL);
     }*/
- 
-    if(3*actual_rank<2*actual_size)
-        return rc;
+    gettimeofday(&time_2, 0x0);
+    allred_itercount++;
     return MPI_SUCCESS;
 }
 
@@ -295,23 +326,31 @@ int MPI_Alltoall(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void
             PMPI_Ialltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm, &request);
         }
         PMPI_Test(&request, &aflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!aflag){
 #ifdef DEBUG
-        //printf("[%d] Signalling its colocated shadow in alltoall. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
         //fflush(stdout);
 #endif
 //            *flags_ptr=1;
 #ifdef SLEEPDEBUG
             double tbefore=MPI_Wtime();
 #endif
-            usleep(mainsleeptime);
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
 #ifdef SLEEPDEBUG
             tbefore=MPI_Wtime()-tbefore;
-            printf("[%d] Current sleep in alltoall took %.6f seconds.\n", actual_rank, tbefore);
-            fflush(stdout);
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
 #endif
             PMPI_Test(&request, &aflag, MPI_STATUS_IGNORE);
         }
+/*        alltoallPrCount += prCount;
+        alltoallCallCount++;*/
         /*if(comm == MPI_COMM_WORLD){
             PMPI_Alltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, ls_data_world_comm);
         }
@@ -351,8 +390,6 @@ int MPI_Alltoall(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void
         pthread_sigmask(SIG_UNBLOCK, &set, NULL);
     }*/
  
-    if(3*actual_rank<2*actual_size)
-        return rc;
     return MPI_SUCCESS;
 }
 
@@ -388,15 +425,31 @@ int MPI_Alltoallv(const void *sendbuf, const int sendcounts[], const int sdispls
             PMPI_Ialltoallv(sendbuf, sendcounts, sdispls, sendtype, recvbuf, recvcounts, rdispls, recvtype, comm, &request);
         }
         PMPI_Test(&request, &avflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!avflag){
 #ifdef DEBUG
-        printf("[%d] Signalling its colocated shadow in alltoallv. Current time : %.3f\n", actual_rank, MPI_Wtime());
-        fflush(stdout);
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //fflush(stdout);
 #endif
-            *flags_ptr=1;
-            usleep(mainsleeptime);
+//            *flags_ptr=1;
+#ifdef SLEEPDEBUG
+            double tbefore=MPI_Wtime();
+#endif
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
+#ifdef SLEEPDEBUG
+            tbefore=MPI_Wtime()-tbefore;
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
+#endif
             PMPI_Test(&request, &avflag, MPI_STATUS_IGNORE);
         }
+/*        alltoallvPrCount += prCount;
+        alltoallvCallCount++;*/
         /*if(comm == MPI_COMM_WORLD){
             PMPI_Alltoallv(sendbuf, sendcounts, sdispls, sendtype, recvbuf, recvcounts, rdispls, recvtype, ls_data_world_comm);
         }
@@ -588,16 +641,31 @@ int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
             PMPI_Igather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm, &request);
         }
         PMPI_Test(&request, &gaflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!gaflag){
 #ifdef DEBUG
-        printf("[%d] Signalling its colocated shadow in gather. Current time : %.3f\n", actual_rank, MPI_Wtime());
-        fflush(stdout);
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //fflush(stdout);
 #endif
 //            *flags_ptr=1;
-            usleep(mainsleeptime);
+#ifdef SLEEPDEBUG
+            double tbefore=MPI_Wtime();
+#endif
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
+#ifdef SLEEPDEBUG
+            tbefore=MPI_Wtime()-tbefore;
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
+#endif
             PMPI_Test(&request, &gaflag, MPI_STATUS_IGNORE);
         }
-
+/*        gatherPrCount += prCount;
+        gatherCallCount++;*/
         if(shStart <= actual_rank && actual_rank <= shEnd){/*forward result to shadow*/
         if(comm_rank == root){
             MPI_Type_get_extent(recvtype, &lb, &extent);
@@ -667,15 +735,31 @@ int MPI_Allgather(const void *sendbuf, int  sendcount,
             PMPI_Iallgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm, &request);
         }
         PMPI_Test(&request, &agflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!agflag){
 #ifdef DEBUG
-        printf("[%d] Signalling its colocated shadow in allgather. Current time : %.3f\n", actual_rank, MPI_Wtime());
-        fflush(stdout);
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //fflush(stdout);
 #endif
 //            *flags_ptr=1;
-            usleep(mainsleeptime);
+#ifdef SLEEPDEBUG
+            double tbefore=MPI_Wtime();
+#endif
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
+#ifdef SLEEPDEBUG
+            tbefore=MPI_Wtime()-tbefore;
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
+#endif
             PMPI_Test(&request, &agflag, MPI_STATUS_IGNORE);
         }
+/*        allgatherPrCount += prCount;
+        allgatherCallCount++;*/
         if(shStart <= actual_rank && actual_rank <= shEnd){/*forward result to shadow*/
             MPI_Type_get_extent(recvtype, &lb, &extent);
             MPI_Comm_size(comm, &comm_size);
@@ -743,15 +827,31 @@ int MPI_Gatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
             PMPI_Igatherv(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, root, comm, &request);
         }
         PMPI_Test(&request, &gvflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!gvflag){
 #ifdef DEBUG
-        printf("[%d] Signalling its colocated shadow in gatherv. Current time : %.3f\n", actual_rank, MPI_Wtime());
-        fflush(stdout);
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //fflush(stdout);
 #endif
 //            *flags_ptr=1;
-            usleep(mainsleeptime);
+#ifdef SLEEPDEBUG
+            double tbefore=MPI_Wtime();
+#endif
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
+#ifdef SLEEPDEBUG
+            tbefore=MPI_Wtime()-tbefore;
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
+#endif
             PMPI_Test(&request, &gvflag, MPI_STATUS_IGNORE);
         }
+/*        gathervPrCount += prCount;
+        gathervCallCount++;*/
         if(shStart <= actual_rank && actual_rank <= shEnd){/*forward result to shadow*/
         if(comm_rank == root){
             MPI_Type_get_extent(recvtype, &lb, &data_size);
@@ -828,15 +928,31 @@ int MPI_Allgatherv(const void *sendbuf, int sendcount,
             PMPI_Iallgatherv(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, comm, &request);
         }
         PMPI_Test(&request, &agvflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!agvflag){
 #ifdef DEBUG
-        printf("[%d] Signalling its colocated shadow in allgatherv. Current time : %.3f\n", actual_rank, MPI_Wtime());
-        fflush(stdout);
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //fflush(stdout);
 #endif
 //            *flags_ptr=1;
-            usleep(mainsleeptime);
+#ifdef SLEEPDEBUG
+            double tbefore=MPI_Wtime();
+#endif
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
+#ifdef SLEEPDEBUG
+            tbefore=MPI_Wtime()-tbefore;
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
+#endif
             PMPI_Test(&request, &agvflag, MPI_STATUS_IGNORE);
         }
+/*        allgathervPrCount += prCount;
+        allgathervCallCount++;*/
         if(shStart <= actual_rank && actual_rank <= shEnd){/*forward result to shadow*/
         MPI_Type_get_extent(recvtype, &lb, &data_size);
         max_i = comm_size - 1;
@@ -910,16 +1026,31 @@ int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
             PMPI_Iscatter(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm, &request);
         }
         PMPI_Test(&request, &sflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!sflag){
 #ifdef DEBUG
-        printf("[%d] Signalling its colocated shadow in scatter. Current time : %.3f\n", actual_rank, MPI_Wtime());
-        fflush(stdout);
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //fflush(stdout);
 #endif
 //            *flags_ptr=1;
-            usleep(mainsleeptime);
+#ifdef SLEEPDEBUG
+            double tbefore=MPI_Wtime();
+#endif
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
+#ifdef SLEEPDEBUG
+            tbefore=MPI_Wtime()-tbefore;
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
+#endif
             PMPI_Test(&request, &sflag, MPI_STATUS_IGNORE);
         }
-
+/*        scatterPrCount += prCount;
+        scatterCallCount++;*/
         if(shStart <= actual_rank && actual_rank <= shEnd){/*forward result to shadow*/
         MPI_Type_get_extent(recvtype, &lb, &data_size);
         length = data_size * (long long)recvcount;
@@ -986,15 +1117,31 @@ int MPI_Scatterv(const void *sendbuf, const int sendcounts[], const int displs[]
             PMPI_Iscatterv(sendbuf, sendcounts, displs, sendtype, recvbuf, recvcount, recvtype, root, comm, &request);
         }
         PMPI_Test(&request, &svflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!svflag){
 #ifdef DEBUG
-        printf("[%d] Signalling its colocated shadow in scatterv. Current time : %.3f\n", actual_rank, MPI_Wtime());
-        fflush(stdout);
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //fflush(stdout);
 #endif
 //            *flags_ptr=1;
-            usleep(mainsleeptime);
+#ifdef SLEEPDEBUG
+            double tbefore=MPI_Wtime();
+#endif
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
+#ifdef SLEEPDEBUG
+            tbefore=MPI_Wtime()-tbefore;
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
+#endif
             PMPI_Test(&request, &svflag, MPI_STATUS_IGNORE);
         }
+/*        scattervPrCount += prCount;
+        scattervCallCount++;*/
         if(shStart <= actual_rank && actual_rank <= shEnd){/*forward result to shadow*/
         MPI_Type_get_extent(recvtype, &lb, &data_size);
         length = data_size * (long long)recvcount;
@@ -1057,15 +1204,31 @@ int MPI_Scan(const void *sendbuf, void *recvbuf, int count,
             PMPI_Iscan(sendbuf, recvbuf, count, datatype, op, comm, &request);
         }
         PMPI_Test(&request, &scflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!scflag){
 #ifdef DEBUG
-        printf("[%d] Signalling its colocated shadow in scan. Current time : %.3f\n", actual_rank, MPI_Wtime());
-        fflush(stdout);
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //fflush(stdout);
 #endif
 //            *flags_ptr=1;
-            usleep(mainsleeptime);
+#ifdef SLEEPDEBUG
+            double tbefore=MPI_Wtime();
+#endif
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
+#ifdef SLEEPDEBUG
+            tbefore=MPI_Wtime()-tbefore;
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
+#endif
             PMPI_Test(&request, &scflag, MPI_STATUS_IGNORE);
         }
+/*        scanPrCount += prCount;
+        scanCallCount++;*/
         if(shStart <= actual_rank && actual_rank <= shEnd){
         /*forward result to shadow*/
         MPI_Type_get_extent(datatype, &lb, &data_size);
@@ -1132,15 +1295,31 @@ int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, const int recvcounts[
             PMPI_Ireduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm, &request);
         }
         PMPI_Test(&request, &rsflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!rsflag){
 #ifdef DEBUG
-        printf("[%d] Signalling its colocated shadow in reduce_scatter. Current time : %.3f\n", actual_rank, MPI_Wtime());
-        fflush(stdout);
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //fflush(stdout);
 #endif
 //            *flags_ptr=1;
-            usleep(mainsleeptime);
+#ifdef SLEEPDEBUG
+            double tbefore=MPI_Wtime();
+#endif
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
+#ifdef SLEEPDEBUG
+            tbefore=MPI_Wtime()-tbefore;
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
+#endif
             PMPI_Test(&request, &rsflag, MPI_STATUS_IGNORE);
         }
+/*        reducescatterPrCount += prCount;
+        reducescatterCallCount++;*/
         if(shStart <= actual_rank && actual_rank <= shEnd){
         /*forward result to shadow*/
         MPI_Type_get_extent(datatype, &lb, &data_size);
@@ -1204,15 +1383,31 @@ int MPI_Reduce_scatter_block(const void *sendbuf, void *recvbuf, int recvcount,
             PMPI_Ireduce_scatter_block(sendbuf, recvbuf, recvcount, datatype, op, comm, &request);
         }
         PMPI_Test(&request, &rsbflag, MPI_STATUS_IGNORE);
+        int prCount = 0;
         while(!rsbflag){
 #ifdef DEBUG
-        printf("[%d] Signalling its colocated shadow in reduce_scatter_block. Current time : %.3f\n", actual_rank, MPI_Wtime());
-        fflush(stdout);
+        //printf("[%d] Signalling its colocated shadow in send. Current time : %.3f\n", actual_rank, MPI_Wtime());
+        //fflush(stdout);
 #endif
 //            *flags_ptr=1;
-            usleep(mainsleeptime);
+#ifdef SLEEPDEBUG
+            double tbefore=MPI_Wtime();
+#endif
+/*            if(prCount == sleepiters)*/
+                usleep(mainsleeptime);
+/*            else
+                prCount++;*/
+#ifdef SLEEPDEBUG
+            tbefore=MPI_Wtime()-tbefore;
+            sleeptime += tbefore;
+            sleepcount++;
+//            printf("[%d] Current sleep in send took %.6f seconds.\n", actual_rank, tbefore);
+//            fflush(stdout);
+#endif
             PMPI_Test(&request, &rsbflag, MPI_STATUS_IGNORE);
         }
+/*        reducescatterblockPrCount += prCount;
+        reducescatterblockCallCount++;*/
         if(shStart <= actual_rank && actual_rank <= shEnd){
         /*forward result to shadow*/
         MPI_Type_get_extent(datatype, &lb, &data_size);
