@@ -74,11 +74,12 @@ int get_my_ip(char *ip){
 #endif
         }
     }
-
+#ifdef USE_RDMA
     if(strncmp(ifa->ifa_name, "ib", 2)){
         printf("[%d] Did not find ib0 interface!\n", actual_rank);
         fflush(stdout);
     }
+#endif
     if(strncmp(ip, "10.", 3)){
         printf("[%d] Error in finding correct IP!\n", actual_rank);
         MPI_Abort(MPI_COMM_WORLD, -1);
